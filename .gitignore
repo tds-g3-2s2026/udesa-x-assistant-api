@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+report.xml
+# Raw measurements of a local run; the ones the spike reports are kept in udesa-x-platform.
+evals/results/
