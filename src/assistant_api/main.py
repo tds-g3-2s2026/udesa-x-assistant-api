@@ -1,6 +1,8 @@
+from importlib.metadata import version
+
 from fastapi import FastAPI
 
-app = FastAPI(title="UdeSA-X Assistant API", version="0.1.0")
+app = FastAPI(title="UdeSA-X Assistant API", version=version("assistant-api"))
 
 
 @app.get("/healthcheck", tags=["health"])
