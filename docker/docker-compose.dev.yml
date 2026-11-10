@@ -1,0 +1,19 @@
+name: udesa-x-assistant-api
+
+services:
+  assistant-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8003:8000"
+
+  # No source volume on purpose: mounting it would replace what the image
+  # carries and stop testing the real artifact.
+  tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: test
+    # Without this it would start on every `docker compose up`.
+    profiles: ["test"]
