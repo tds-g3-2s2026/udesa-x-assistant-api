@@ -124,3 +124,27 @@ Son las de la guía de la cátedra:
   convertirse en varias llamadas contra la cuota.
 - Nunca access keys: en local con `aws login`, en el cluster con el rol del pod.
 - El ARN del modelo va en una variable de entorno, nunca en el código.
+
+## Despliegue
+
+Corre en `tds-cluster`, namespace `tds-group-3`, con el pipeline de platform: cada push a `main`
+que pasa el CI construye la imagen, la publica en ECR (`tds-group-3/assistant-api`) y aplica
+`k8s/`. No tiene base, así que no hay migración.
+
+- **Bedrock sin claves.** El pod corre con la ServiceAccount `tds-group-3-bedrock-sa`, que
+  aplica el docente (`k8s/serviceaccount.yaml` de platform). EKS lee su anotación y le da al
+  pod credenciales temporales del rol `tds-group-3-bedrock-role`, el único que acepta esa
+  ServiceAccount.
+- **Configuración** en `k8s/configmap.yaml`: la región del perfil (`us-east-2`), el interruptor
+  `ASSISTANT_ENABLED` y el límite `TURNS_PER_HOUR`.
+- **Secrets del repositorio**, que el pipeline arma como `assistant-api-secret`:
+
+| Secret | Valor |
+|---|---|
+| `BEDROCK_MODEL_ID` | El ARN del perfil de inferencia de EKS del grupo. Nunca en el repo |
+| `REDIS_URL` | El Redis del cluster, base `/2` (users-api usa `/0` y posts-api `/1`) |
+| `JWT_PUBLIC_KEY` | La pública de users-api, la misma que tiene posts-api |
+| `OTEL_EXPORTER_OTLP_HEADERS` | De organización: no hace falta cargarlo |
+
+Para apagar el asistente sin tocar el código, `ASSISTANT_ENABLED: "false"` en el ConfigMap:
+el pipeline reemplaza los pods cuando cambia la configuración y el endpoint responde `503`.
