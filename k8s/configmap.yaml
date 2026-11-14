@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: assistant-api-config
+  namespace: tds-group-3
+data:
+  # The region of the group's inference profile for EKS. The ARN itself is a secret.
+  BEDROCK_REGION: "us-east-2"
+  JWT_ISSUER: "users-api"
+  # "false" turns the assistant into a 503 with a deploy of the config alone.
+  ASSISTANT_ENABLED: "true"
+  # Twenty requests of up to eight steps an hour, per account.
+  TURNS_PER_HOUR: "160"
+  # Logs, metrics and traces to Grafana Cloud. The token goes in the Secret.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "https://otlp-gateway-prod-sa-east-1.grafana.net/otlp"
