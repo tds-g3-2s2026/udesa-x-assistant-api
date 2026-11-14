@@ -8,6 +8,10 @@ dependencies = [
     "uvicorn[standard]>=0.34",
     # crt: the credentials that `aws login` leaves behind need it to be read.
     "boto3[crt]>=1.41",
+    "pydantic-settings>=2.7",
+    # crypto: the access tokens of users-api are EdDSA.
+    "pyjwt[crypto]>=2.10",
+    "redis>=5.2",
 ]
 
 [dependency-groups]
@@ -17,6 +21,8 @@ dev = [
     "pytest-cov>=6.0",
     "httpx>=0.28",
     "ruff>=0.9",
+    # Redis in memory: the rate limit is tested without a server.
+    "fakeredis>=2.26",
 ]
 
 [build-system]
