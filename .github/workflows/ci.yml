@@ -7,3 +7,18 @@ jobs:
   ci:
     uses: tds-g3-2s2026/udesa-x-platform/.github/workflows/ci-python.yml@main
     secrets: inherit
+
+  # Only a commit on main that passed CI reaches the cluster. The pipeline and
+  # what it applies are documented in udesa-x-platform, "Despliegue continuo".
+  deploy:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: tds-g3-2s2026/udesa-x-platform/.github/workflows/deploy.yml@main
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      servicio: assistant-api
+      # No database, so no migration.
+      secretos: BEDROCK_MODEL_ID REDIS_URL JWT_PUBLIC_KEY OTEL_EXPORTER_OTLP_HEADERS
