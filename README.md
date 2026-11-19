@@ -132,8 +132,9 @@ que pasa el CI construye la imagen, la publica en ECR (`tds-group-3/assistant-ap
 `k8s/`. No tiene base, así que no hay migración.
 
 - **Bedrock sin claves.** El pod corre con la ServiceAccount `tds-group-3-bedrock-sa`, que
-  aplica el docente (`k8s/serviceaccount.yaml` de platform). EKS lee su anotación y le da al
-  pod credenciales temporales del rol `tds-group-3-bedrock-role`, el único que acepta esa
+  aplica el docente desde `k8s/serviceaccount.yaml`: el pipeline no puede crear
+  ServiceAccounts y nunca aplica ese archivo. EKS lee su anotación y le da al pod
+  credenciales temporales del rol `tds-group-3-bedrock-role`, el único que acepta esa
   ServiceAccount.
 - **Configuración** en `k8s/configmap.yaml`: la región del perfil (`us-east-2`), el interruptor
   `ASSISTANT_ENABLED` y el límite `TURNS_PER_HOUR`.
