@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # thousandth of a dollar: the limit is there for a client stuck in a loop.
     turns_per_hour: int = 160
 
+    log_level: str = "INFO"
+    # Set in the cluster, from the ConfigMap. Without it nothing leaves the process.
+    otel_exporter_otlp_endpoint: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

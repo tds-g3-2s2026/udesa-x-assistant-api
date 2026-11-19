@@ -12,6 +12,11 @@ dependencies = [
     # crypto: the access tokens of users-api are EdDSA.
     "pyjwt[crypto]>=2.10",
     "redis>=5.2",
+    # Traces, logs and metrics to Grafana Cloud, like the other services (ADR-013).
+    "opentelemetry-sdk>=1.45.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.0",
+    "opentelemetry-instrumentation-fastapi>=0.66b0",
+    "opentelemetry-instrumentation-logging>=0.66b0",
 ]
 
 [dependency-groups]
