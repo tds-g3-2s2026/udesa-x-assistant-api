@@ -23,7 +23,7 @@ spec:
       # ADR-023: the pod calls Bedrock as tds-group-3-bedrock-role, whose trust
       # policy only accepts this ServiceAccount. EKS reads its annotation and hands
       # the pod temporary credentials of the role: no access keys anywhere. The
-      # docente applies it (udesa-x-platform, k8s/serviceaccount.yaml).
+      # docente applies it (k8s/serviceaccount.yaml).
       serviceAccountName: tds-group-3-bedrock-sa
       containers:
         - name: assistant-api
