@@ -122,6 +122,9 @@ Son las de la guía de la cátedra:
 - Toda llamada lleva `maxTokens` (400).
 - Sin reintentos automáticos: el cliente sale con un solo intento, y un error se ve en lugar de
   convertirse en varias llamadas contra la cuota.
+- Tiempo límite: 3 segundos para conectar y 10 para la respuesta. Si Bedrock no contesta, rechaza
+  la llamada o no se puede conectar, el endpoint responde `503` con `model-unavailable`, y el
+  motivo queda en el log sin el texto del pedido.
 - Nunca access keys: en local con `aws login`, en el cluster con el rol del pod.
 - El ARN del modelo va en una variable de entorno, nunca en el código.
 

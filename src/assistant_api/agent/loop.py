@@ -15,7 +15,13 @@ from assistant_api.agent.prompt import SYSTEM_PROMPT
 # A request that takes more than this is a request the user already gave up on.
 MAX_STEPS = 8
 
-ONE_ACTION_PER_STEP = "Una acción por paso: esta no se ejecutó"
+# Without the second sentence the model took the refusal as a failure and gave up
+# on the rest of the request (R11 in the spike).
+ONE_ACTION_PER_STEP = "Una acción por paso: esta no se ejecutó. Pedila en el paso siguiente."
+
+
+class ModelUnavailableError(Exception):
+    """The model did not answer: a timeout, a refused call or no connection to it."""
 
 
 @dataclass(frozen=True)
@@ -29,7 +35,9 @@ class ModelTurn:
 
 
 class Model(Protocol):
-    def converse(self, system: str, messages: list[dict], tools: list[dict]) -> ModelTurn: ...
+    def converse(self, system: str, messages: list[dict], tools: list[dict]) -> ModelTurn:
+        """One answer of the model, or `ModelUnavailableError` if it gave none."""
+        ...
 
 
 class App(Protocol):

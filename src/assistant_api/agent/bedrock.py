@@ -9,12 +9,18 @@ import time
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 
-from assistant_api.agent.loop import ModelTurn
+from assistant_api.agent.loop import ModelTurn, ModelUnavailableError
 
 # An action is a few dozen tokens and the spoken answer a sentence: this is
 # room to spare, and a ceiling on what a runaway answer can cost.
 MAX_TOKENS = 400
+
+# Seconds. The first action takes about one in the spike; a call still waiting
+# after ten is one the user stopped waiting for, and it frees its thread.
+CONNECT_TIMEOUT = 3
+READ_TIMEOUT = 10
 
 
 class BedrockModel:
@@ -30,7 +36,11 @@ class BedrockModel:
         self.client = client or boto3.client(
             "bedrock-runtime",
             region_name=region,
-            config=Config(retries={"total_max_attempts": 1, "mode": "standard"}),
+            config=Config(
+                connect_timeout=CONNECT_TIMEOUT,
+                read_timeout=READ_TIMEOUT,
+                retries={"total_max_attempts": 1, "mode": "standard"},
+            ),
         )
 
     def converse(self, system: str, messages: list[dict], tools: list[dict]) -> ModelTurn:
@@ -45,7 +55,14 @@ class BedrockModel:
         if not self.thinking:
             request["additionalModelRequestFields"] = {"thinking": {"type": "disabled"}}
         started = time.perf_counter()
-        response = self.client.converse(**request)
+        try:
+            response = self.client.converse(**request)
+        except ClientError as error:
+            # Throttled, denied or rejected: the code says which, and it is safe to log.
+            raise ModelUnavailableError(error.response["Error"]["Code"]) from error
+        except BotoCoreError as error:
+            # Timeouts and connection errors, which come without a code.
+            raise ModelUnavailableError(type(error).__name__) from error
         latency_ms = (time.perf_counter() - started) * 1000
         usage = response["usage"]
         return ModelTurn(
