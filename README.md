@@ -58,7 +58,7 @@ src/assistant_api/
 evals/
 ├── feed.json          # 30 posts y 12 cuentas sintéticos
 ├── app.py             # la app simulada: 5 posts por pantalla, ejecuta el catálogo
-├── requests.json      # los 25 pedidos, cada uno con el estado final esperado
+├── requests.json      # los 30 pedidos, cada uno con el estado final esperado
 ├── scoring.py         # compara el estado final con el esperado
 ├── run.py             # corre los pedidos contra el modelo y mide
 └── playground.py      # un pedido, paso a paso
@@ -103,16 +103,30 @@ que se corre a mano y nunca en el CI.
 
    Muestra cada paso con la acción, los tokens y la demora, y al final qué cambió en la app.
 
-4. Los 25 pedidos:
+4. Los 30 pedidos:
 
    ```bash
    uv run python -m evals.run --label haiku-5.5
    uv run python -m evals.run --label haiku-5.5 --only R01,R06   # algunos
    ```
 
-   Imprime cada pedido y un resumen: tasa de éxito, llamadas al modelo por pedido, demora
-   hasta la primera acción (mediana y p95), tokens, costo y si el modelo obedeció al post que
-   intenta darle órdenes. El detalle queda en `evals/results/`.
+   Imprime cada pedido y un resumen: tasa de éxito, en total y por tipo de pedido, llamadas
+   al modelo por pedido, demora hasta la primera acción (mediana y p95), largo de la
+   respuesta hablada, tokens, costo y si el modelo obedeció a alguno de los dos posts que
+   intentan darle órdenes. El detalle queda en `evals/results/`.
+
+5. **Contra el servicio desplegado**, el camino completo que recorre el teléfono: el JWT, el
+   rate limit, el prompt de producción y Bedrock con el rol del pod. La app sigue siendo la
+   simulada. No necesita sesión de AWS, sino una cuenta de la app:
+
+   ```bash
+   uv run python -m evals.run --label produccion --remote https://tds-group-3.tds-linar.udesa.edu.ar/api
+   ```
+
+   Pide el email o handle y la contraseña, o los toma de `EVAL_IDENTIFIER` y `EVAL_PASSWORD`.
+   Son unos 70 pasos, debajo del límite de 160 por hora de una cuenta. El endpoint no informa
+   tokens, así que el costo sale de una corrida local. Además cuenta las acciones que ven
+   otros y que el servidor no marcó para confirmar: tienen que ser cero.
 
 `--thinking` prende el razonamiento del modelo. Está apagado por defecto: para elegir una de
 doce acciones no hace falta, y demora segundos la primera acción.
