@@ -5,8 +5,9 @@ teléfono y un modelo de Amazon Bedrock elige, paso a paso, acciones de un catá
 sobre lo que hay en pantalla: bajar en el feed, dar like, buscar, seguir, publicar. El modelo
 nunca llama a la API de UdeSA-X: la app ejecuta cada acción como si el usuario tocara.
 
-La decisión está en el ADR-023 de `udesa-x-platform`. Hoy el repo tiene el bucle del agente y
-el arnés de evaluación del spike `AI-03`. El endpoint y el deploy llegan con `AI-04`.
+La decisión está en el ADR-023 de `udesa-x-platform`. La app llama a `POST /api/assistant/turns`
+una vez por paso, y el servicio corre en el cluster desde el 16/11 (`AI-04`). El arnés de
+evaluación del spike `AI-03` sigue en `evals/`.
 
 ## Cómo funciona
 
@@ -43,11 +44,16 @@ herramienta en el mismo paso, se ejecuta solo la primera.
 
 ```
 src/assistant_api/
-├── main.py            # la app de FastAPI, por ahora solo /healthcheck
+├── main.py            # la app de FastAPI: el endpoint, /healthcheck y la telemetría
+├── turns.py           # POST /assistant/turns, con los límites de lo que manda la app
+├── guards.py          # el interruptor, el JWT, el rate limit y los errores
+├── telemetry.py       # trazas, logs y métricas, sin el texto de nadie
+├── settings.py        # la configuración que se lee del entorno
 └── agent/
     ├── catalog.py     # las acciones como herramientas de Converse y su validación
     ├── prompt.py      # las instrucciones del modelo
     ├── loop.py        # el bucle: el modelo elige, la app ejecuta, hasta finish o 8 pasos
+    ├── turn.py        # un paso del endpoint, armado de nuevo con lo que manda la app
     └── bedrock.py     # el cliente de Bedrock, con tope de tokens y sin reintentos
 evals/
 ├── feed.json          # 30 posts y 12 cuentas sintéticos
@@ -152,3 +158,21 @@ que pasa el CI construye la imagen, la publica en ECR (`tds-group-3/assistant-ap
 
 Para apagar el asistente sin tocar el código, `ASSISTANT_ENABLED: "false"` en el ConfigMap:
 el pipeline reemplaza los pods cuando cambia la configuración y el endpoint responde `503`.
+
+## Métricas y trazas
+
+Igual que los demás servicios (ADR-013): un span por request, cada línea de log con su traza y
+la duración de los requests en segundos. Salen a Grafana Cloud solo si está
+`OTEL_EXPORTER_OTLP_ENDPOINT`, que en el cluster viene del ConfigMap. **Ninguna lleva el texto
+del pedido, de los posts ni de la respuesta** (ADR-023): solo nombres del catálogo y números.
+
+| Métrica | Qué mide | Atributos |
+|---|---|---|
+| `assistant.steps` | Pasos respondidos | `action`, del catálogo o `finish`, y `outcome`: `action`, `finished`, `no_action`, `refused` o `step_limit` |
+| `assistant.model.duration` | Cuánto tardó cada llamada al modelo, en segundos | |
+| `assistant.model.tokens` | Tokens que leyó y escribió el modelo | `type`: `input` u `output` |
+| `assistant.spoken.length` | Largo de la oración que la app lee al terminar, en caracteres | |
+
+Cada llamada al modelo es un span `assistant.model`, hijo del span del request, con los tokens
+como atributos. En Grafana las métricas aparecen con guiones bajos y el sufijo de Prometheus,
+como `assistant_steps_total`.

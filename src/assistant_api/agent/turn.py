@@ -8,6 +8,7 @@ Nothing of it is stored (ADR-023).
 
 from dataclasses import dataclass, field
 
+from assistant_api import telemetry
 from assistant_api.agent.catalog import CATALOG, invalid_arguments, tool_specs
 from assistant_api.agent.loop import MAX_STEPS, Model, ModelTurn, as_json, tool_result, user_text
 from assistant_api.agent.prompt import SYSTEM_PROMPT
@@ -87,13 +88,38 @@ def finish(say: str, outcome: str, turns: list[ModelTurn]) -> Decision:
 
 def next_step(model: Model, request: str, screen: dict, steps: list[PastStep]) -> Decision:
     """The action the app takes next, or finish with what it reads aloud."""
+    decision = decide(model, request, screen, steps)
+    record(decision)
+    return decision
+
+
+def record(decision: Decision) -> None:
+    """What the step cost and how it ended. Only catalog names and numbers: no text."""
+    telemetry.steps.add(1, {"action": decision.action, "outcome": decision.outcome})
+    for turn in decision.turns:
+        telemetry.model_duration.record(turn.latency_ms / 1000)
+        telemetry.model_tokens.add(turn.input_tokens, {"type": "input"})
+        telemetry.model_tokens.add(turn.output_tokens, {"type": "output"})
+    if decision.action == "finish":
+        telemetry.spoken_length.record(len(decision.arguments.get("say", "")))
+
+
+def decide(model: Model, request: str, screen: dict, steps: list[PastStep]) -> Decision:
     if len(steps) >= MAX_STEPS:
         return finish(STEP_LIMIT_SAY, "step_limit", [])
 
     messages = conversation(request, screen, steps)
     turns: list[ModelTurn] = []
     for _ in range(ATTEMPTS):
-        turn = model.converse(SYSTEM_PROMPT, messages, tool_specs())
+        # A span per call, inside the request's: the tokens, never the messages.
+        with telemetry.tracer.start_as_current_span("assistant.model") as span:
+            turn = model.converse(SYSTEM_PROMPT, messages, tool_specs())
+            span.set_attributes(
+                {
+                    "gen_ai.usage.input_tokens": turn.input_tokens,
+                    "gen_ai.usage.output_tokens": turn.output_tokens,
+                }
+            )
         turns.append(turn)
         calls = [block["toolUse"] for block in turn.content if "toolUse" in block]
         if not calls:
