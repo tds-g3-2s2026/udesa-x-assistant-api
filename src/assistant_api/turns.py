@@ -7,15 +7,18 @@ app reads aloud.
 """
 
 import json
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
-from assistant_api.agent.loop import MAX_STEPS, Model
+from assistant_api.agent.loop import MAX_STEPS, Model, ModelUnavailableError
 from assistant_api.agent.turn import PastStep, next_step
 from assistant_api.guards import AllowedUserDep, ProblemError
+
+logger = logging.getLogger(__name__)
 
 # What the app sends is limited in size as well as in shape: everything here
 # goes to the model on every step, and the model is paid by the token.
@@ -80,8 +83,18 @@ ModelDep = Annotated[Model, Depends(get_model)]
 @router.post("/turns")
 async def take_turn(body: TurnRequest, _: AllowedUserDep, model: ModelDep) -> TurnResponse:
     steps = [PastStep(step.action, step.arguments, step.result) for step in body.steps]
-    # boto3 does not do asyncio: the call to Bedrock waits on a thread, not on the loop.
-    decision = await run_in_threadpool(next_step, model, body.request, body.screen, steps)
+    try:
+        # boto3 does not do asyncio: the call to Bedrock waits on a thread, not on the loop.
+        decision = await run_in_threadpool(next_step, model, body.request, body.screen, steps)
+    except ModelUnavailableError as error:
+        # The reason only: what the user asked never reaches the logs.
+        logger.warning("The model did not answer: %s", error)
+        raise ProblemError(
+            status=503,
+            code="model-unavailable",
+            title="El asistente no está disponible",
+            detail="El modelo no respondió. Probá de nuevo en un rato.",
+        ) from error
     return TurnResponse(
         action=decision.action,
         arguments=decision.arguments,

@@ -1,6 +1,10 @@
 """What the Bedrock model sends and how it reads the answer, against a fake client."""
 
-from assistant_api.agent.bedrock import MAX_TOKENS, BedrockModel
+import pytest
+from botocore.exceptions import ClientError, ReadTimeoutError
+
+from assistant_api.agent.bedrock import CONNECT_TIMEOUT, MAX_TOKENS, READ_TIMEOUT, BedrockModel
+from assistant_api.agent.loop import ModelUnavailableError
 
 
 class FakeClient:
@@ -45,3 +49,37 @@ def test_the_real_client_never_retries():
 
     assert model.client.meta.region_name == "us-east-1"
     assert model.client.meta.config.retries["total_max_attempts"] == 1
+
+
+def test_the_real_client_gives_up_after_its_timeouts():
+    config = BedrockModel("arn", region="us-east-1").client.meta.config
+
+    assert (config.connect_timeout, config.read_timeout) == (CONNECT_TIMEOUT, READ_TIMEOUT)
+
+
+class FailingClient:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def converse(self, **request) -> dict:
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (ReadTimeoutError(endpoint_url="https://bedrock"), "ReadTimeoutError"),
+        (
+            ClientError(
+                {"Error": {"Code": "ThrottlingException", "Message": "Too many requests"}},
+                "Converse",
+            ),
+            "ThrottlingException",
+        ),
+    ],
+)
+def test_ai06_a_call_without_an_answer_is_reported_with_its_reason(error, reason):
+    model = BedrockModel("arn", region="us-east-1", client=FailingClient(error))
+
+    with pytest.raises(ModelUnavailableError, match=reason):
+        model.converse("s", [], [])

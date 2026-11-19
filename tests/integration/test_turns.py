@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from assistant_api.agent.bedrock import BedrockModel
-from assistant_api.agent.loop import MAX_STEPS, ModelTurn
+from assistant_api.agent.loop import MAX_STEPS, ModelTurn, ModelUnavailableError
 from assistant_api.agent.turn import NOT_DONE_SAY, STEP_LIMIT_SAY
 from assistant_api.guards import load_public_key
 from assistant_api.main import app
@@ -266,6 +266,25 @@ async def test_ai04_answers_503_when_it_is_turned_off(api):
     assert response.status_code == 503
     assert response.json()["type"].endswith("/assistant-off")
     assert model.received == []
+
+
+class SilentModel:
+    """A model that never answers, the way a Bedrock timeout looks from the loop."""
+
+    def converse(self, system: str, messages: list[dict], tools: list[dict]) -> ModelTurn:
+        raise ModelUnavailableError("ReadTimeoutError")
+
+
+async def test_ai06_a_model_that_does_not_answer_ends_in_503(api, caplog):
+    app.dependency_overrides[get_model] = SilentModel
+
+    response = await api.post(URL, json=turn(), headers=signed_in())
+
+    assert response.status_code == 503
+    assert response.json()["type"].endswith("/model-unavailable")
+    # The reason is logged, and what the user asked is not.
+    assert "ReadTimeoutError" in caplog.text
+    assert "Fede" not in caplog.text
 
 
 async def test_without_a_model_configured_it_answers_503(api):
