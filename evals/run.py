@@ -1,29 +1,39 @@
-"""Runs the scripted requests against a Bedrock model and measures them.
+"""Runs the scripted requests and measures them, against a Bedrock model or the deployed service.
 
     uv run python -m evals.run --label haiku-5.5
+    uv run python -m evals.run --label produccion --remote https://<host>/api
 
 Every request is a few model calls that cost money and use the group's monthly
 quota, so it runs by hand and never in the CI. `--only R01,R05` runs a few.
 
-The model comes from the environment, and its ARN is never written in the repo:
+Locally, the model comes from the environment, and its ARN is never written in
+the repo:
 
     AWS_PROFILE       tds-group-3, after `aws login --remote --profile tds-group-3`
     BEDROCK_REGION    us-east-1 locally
     BEDROCK_MODEL_ID  the ARN of the group's local inference profile
+
+With `--remote`, the steps go to the deployed endpoint instead (see evals/remote.py).
 """
 
 import argparse
+import getpass
 import json
 import os
 import statistics
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from assistant_api.agent.bedrock import BedrockModel
-from assistant_api.agent.loop import Model, Transcript, run_request
-from evals.app import INJECTED_POST, SimulatedApp
+from assistant_api.agent.loop import Transcript, run_request
+from evals.app import SimulatedApp
+from evals.remote import DeployedAssistant
 from evals.scoring import problems
+
+# Carries out one request on the app: the local loop or the deployed service.
+Runner = Callable[[SimulatedApp, str], Transcript]
 
 REQUESTS = Path(__file__).with_name("requests.json")
 RESULTS = Path(__file__).with_name("results")
@@ -46,11 +56,11 @@ def cost(transcript: Transcript) -> float:
     return (transcript.input_tokens * PRICE_INPUT + transcript.output_tokens * PRICE_OUTPUT) / 1e6
 
 
-def evaluate(model: Model, requests: list[dict]) -> list[dict]:
+def evaluate(runner: Runner, requests: list[dict]) -> list[dict]:
     rows = []
     for item in requests:
         app = SimulatedApp()
-        transcript = run_request(model, app, item["request"])
+        transcript = runner(app, item["request"])
         found = problems(app.changes(), item["expect"])
         if transcript.outcome != "finished":
             found.insert(0, f"terminó por {transcript.outcome}")
@@ -73,7 +83,8 @@ def evaluate(model: Model, requests: list[dict]) -> list[dict]:
             "output_tokens": transcript.output_tokens,
             "cost_usd": round(cost(transcript), 6),
             "confirmed": app.confirmed,
-            "followed_injection": INJECTED_POST in app.retweeted,
+            "unconfirmed": getattr(transcript, "unconfirmed", 0),
+            "followed_injection": app.obeyed_injection(),
         }
         rows.append(row)
         mark = "ok " if row["ok"] else "MAL"
@@ -89,7 +100,12 @@ def percentile(values: list[float], fraction: float) -> float:
 def summarize(rows: list[dict]) -> dict:
     first = [row["first_action_ms"] for row in rows]
     calls = [ms for row in rows for ms in row["call_ms"]]
-    return {
+    # What the app reads aloud: the spike asked for a sentence and got up to 252 characters.
+    said = [len(row["said"] or "") for row in rows]
+    kinds: dict[str, list[bool]] = {}
+    for row in rows:
+        kinds.setdefault(row["kind"], []).append(row["ok"])
+    summary = {
         "requests": len(rows),
         "succeeded": sum(row["ok"] for row in rows),
         "success_rate": round(sum(row["ok"] for row in rows) / len(rows), 3),
@@ -97,12 +113,32 @@ def summarize(rows: list[dict]) -> dict:
         "first_action_ms_median": round(statistics.median(first)),
         "first_action_ms_p95": round(percentile(first, 0.95)),
         "call_ms_median": round(statistics.median(calls)),
-        "input_tokens_per_request": round(statistics.mean(row["input_tokens"] for row in rows)),
-        "output_tokens_per_request": round(statistics.mean(row["output_tokens"] for row in rows)),
-        "cost_usd_per_request": round(statistics.mean(row["cost_usd"] for row in rows), 6),
-        "cost_usd_total": round(sum(row["cost_usd"] for row in rows), 4),
+        "said_chars_median": round(statistics.median(said)),
+        "said_chars_max": max(said),
+        # "4/5": the ambiguous and the injected ones are the ones to read on their own.
+        "by_kind": {kind: f"{sum(oks)}/{len(oks)}" for kind, oks in sorted(kinds.items())},
         "followed_injection": sum(row["followed_injection"] for row in rows),
+        # Seen by others and not marked to confirm by the server: has to be zero.
+        "unconfirmed": sum(row.get("unconfirmed", 0) for row in rows),
     }
+    # The deployed endpoint does not report tokens: cost is measured locally.
+    if any(row["input_tokens"] for row in rows):
+        summary |= {
+            "input_tokens_per_request": round(statistics.mean(r["input_tokens"] for r in rows)),
+            "output_tokens_per_request": round(statistics.mean(r["output_tokens"] for r in rows)),
+            "cost_usd_per_request": round(statistics.mean(r["cost_usd"] for r in rows), 6),
+            "cost_usd_total": round(sum(row["cost_usd"] for row in rows), 4),
+        }
+    return summary
+
+
+def runner_for(args: argparse.Namespace) -> Runner:
+    if args.remote:
+        identifier = os.getenv("EVAL_IDENTIFIER") or input("Email o handle de la cuenta: ")
+        password = os.getenv("EVAL_PASSWORD") or getpass.getpass("Contraseña: ")
+        return DeployedAssistant.sign_in(args.remote, identifier, password).run
+    model = model_from_environment(thinking=args.thinking)
+    return lambda app, request: run_request(model, app, request)
 
 
 def main() -> None:
@@ -110,6 +146,7 @@ def main() -> None:
     parser.add_argument("--label", required=True, help="Nombre del modelo en el resultado")
     parser.add_argument("--only", help="Ids separados por comas, como R01,R05")
     parser.add_argument("--thinking", action="store_true", help="Con el razonamiento prendido")
+    parser.add_argument("--remote", metavar="URL", help="Contra el servicio desplegado, con /api")
     args = parser.parse_args()
 
     requests = json.loads(REQUESTS.read_text(encoding="utf-8"))
@@ -117,7 +154,7 @@ def main() -> None:
         wanted = set(args.only.split(","))
         requests = [item for item in requests if item["id"] in wanted]
 
-    rows = evaluate(model_from_environment(thinking=args.thinking), requests)
+    rows = evaluate(runner_for(args), requests)
     summary = summarize(rows)
     print(json.dumps(summary, indent=2))
 
@@ -125,7 +162,13 @@ def main() -> None:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     suffix = "-razonando" if args.thinking else ""
     path = RESULTS / f"{stamp}-{args.label}{suffix}.json"
-    report = {"label": args.label, "thinking": args.thinking, "summary": summary, "rows": rows}
+    report = {
+        "label": args.label,
+        "thinking": args.thinking,
+        "remote": args.remote,
+        "summary": summary,
+        "rows": rows,
+    }
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Resultado en {path}")
 
