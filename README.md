@@ -9,6 +9,9 @@ La decisión está en el ADR-023 de `udesa-x-platform`. La app llama a `POST /ap
 una vez por paso, y el servicio corre en el cluster desde el 16/11 (`AI-04`). El arnés de
 evaluación del spike `AI-03` sigue en `evals/`.
 
+Qué decide el modelo y qué decide la persona, los límites, los datos que salen del teléfono y
+los sesgos están en [`docs/USO-RESPONSABLE.md`](./docs/USO-RESPONSABLE.md) (`AI-07`).
+
 ## Cómo funciona
 
 1. Llega el pedido con la foto de la pantalla: los posts visibles como `p1`, `p2`... y las
