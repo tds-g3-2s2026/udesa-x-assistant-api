@@ -27,12 +27,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from assistant_api.agent.bedrock import BedrockModel
-from assistant_api.agent.loop import Transcript, run_request
+from assistant_api.agent.loop import Transcript
 from evals.app import SimulatedApp
-from evals.remote import DeployedAssistant
+from evals.remote import DeployedAssistant, LocalAssistant
 from evals.scoring import problems
 
-# Carries out one request on the app: the local loop or the deployed service.
+# Carries out one request on the app, step by step: in this process or on the deployed service.
 Runner = Callable[[SimulatedApp, str], Transcript]
 
 REQUESTS = Path(__file__).with_name("requests.json")
@@ -137,8 +137,7 @@ def runner_for(args: argparse.Namespace) -> Runner:
         identifier = os.getenv("EVAL_IDENTIFIER") or input("Email o handle de la cuenta: ")
         password = os.getenv("EVAL_PASSWORD") or getpass.getpass("Contraseña: ")
         return DeployedAssistant.sign_in(args.remote, identifier, password).run
-    model = model_from_environment(thinking=args.thinking)
-    return lambda app, request: run_request(model, app, request)
+    return LocalAssistant(model_from_environment(thinking=args.thinking)).run
 
 
 def main() -> None:
