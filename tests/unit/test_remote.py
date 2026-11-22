@@ -6,9 +6,10 @@ import json
 import httpx
 import pytest
 
+from assistant_api.agent.loop import ModelTurn
 from evals import run
 from evals.app import SimulatedApp
-from evals.remote import DeployedAssistant
+from evals.remote import DeployedAssistant, LocalAssistant
 
 BASE = "https://udesa-x.test/api"
 
@@ -105,6 +106,36 @@ def test_remote_runs_sign_in_with_the_account_from_the_environment(monkeypatch):
 
     assert signed == [(BASE, "@alumno", "clave")]
     assert callable(runner)
+
+
+class ScriptedModel:
+    """Answers each call with the next scripted action, and keeps what it was sent."""
+
+    def __init__(self, *actions: tuple[str, dict]) -> None:
+        self.actions = list(actions)
+        self.received: list[list[dict]] = []
+
+    def converse(self, system: str, messages: list[dict], tools: list[dict]) -> ModelTurn:
+        self.received.append(list(messages))
+        name, arguments = self.actions.pop(0)
+        call = {"toolUse": {"toolUseId": "t1", "name": name, "input": arguments}}
+        return ModelTurn(content=[call], input_tokens=100, output_tokens=10, latency_ms=50.0)
+
+
+def test_ai06_a_local_run_rebuilds_the_conversation_like_the_endpoint():
+    model = ScriptedModel(("like_post", {"ref": "p3"}), ("finish", {"say": "Listo"}))
+    app = SimulatedApp()
+
+    transcript = LocalAssistant(model).run(app, "dale like al tercero")
+
+    assert (transcript.outcome, transcript.said) == ("finished", "Listo")
+    assert app.changes()["like"] == ["post-03"]
+    assert transcript.input_tokens == 200
+    # The second call starts again from the request, as turns.py does, and the
+    # screen travels only with the last result.
+    first, *rest = model.received[1]
+    assert first["content"][0]["text"] == "Pedido: dale like al tercero"
+    assert "pantalla" in rest[-1]["content"][0]["toolResult"]["content"][0]["json"]
 
 
 def test_local_runs_use_the_model_from_the_environment(monkeypatch):
