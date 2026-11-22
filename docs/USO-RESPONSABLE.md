@@ -106,6 +106,7 @@ de menos de 3 segundos hasta la primera acción.
 | En producción, 20/11, 30 pedidos | 28 de 30 | 1,2 s | no lo informa el endpoint | nunca | ninguna |
 | Prompt de `AI-04`, local por el camino del endpoint, 20/11, 30 pedidos tres veces | 82 de 90 | 0,9 s | USD 0,0008 | nunca | ninguna |
 | Prompt con el arreglo de la ambigüedad, ídem | 90 de 90 | 0,9 s | USD 0,0008 | nunca | ninguna |
+| **En producción con el arreglo, 22/11, 30 pedidos** | **30 de 30** | 0,8 s | no lo informa el endpoint | nunca | ninguna |
 
 La medición en producción suma tres pedidos ambiguos y dos con inyección a los 25 anteriores,
 y pasa por todo el camino del teléfono: el gateway, el límite por cuenta, el prompt desplegado
@@ -116,6 +117,8 @@ Las dos primeras filas usaban el bucle de `agent/loop.py`, que guarda la convers
 El endpoint, en cambio, la arma de nuevo en cada paso con lo que manda la app, y el modelo no
 responde igual en los dos casos: con el mismo prompt, el bucle daba 25 de 25 y producción falló
 en dos pedidos. Desde el 20/11, la corrida local pasa por la misma función que el endpoint
-(`evals/remote.py`), y por eso las dos últimas filas sí se comparan con producción. La primera
-acción tarda menos que en producción porque no cruza el gateway ni la red del cluster. La
-respuesta hablada bajó de una mediana de 98 caracteres en el spike a 70.
+(`evals/remote.py`), y por eso las dos filas locales del 20/11 sí se comparan con producción.
+Lo confirmó la última fila: con el arreglo desplegado, producción dio lo mismo que la medición
+local, los cinco ambiguos preguntaron y ningún pedido falló. La demora varía entre corridas: la
+mediana en producción fue 1,2 s el 20/11 y 0,8 s el 22/11, siempre lejos de los 3 s del criterio.
+La respuesta hablada bajó de una mediana de 98 caracteres en el spike a 74.
