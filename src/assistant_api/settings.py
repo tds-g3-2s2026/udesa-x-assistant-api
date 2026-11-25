@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     # on every call.
     bedrock_model_id: str = ""
     bedrock_region: str = "us-east-2"
+    # What the traces call the model, and what it costs: USD per million tokens
+    # read and written, Claude Haiku 5.5 in us-east-2 (ESTIMACION-COSTOS-IA.md
+    # in udesa-x-platform). Changing the model changes these too.
+    bedrock_model_name: str = "claude-haiku-5-5"
+    bedrock_input_price: float = 0.11
+    bedrock_output_price: float = 0.55
 
     # The public half of the key users-api signs its access tokens with.
     jwt_public_key: str
@@ -29,6 +35,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # Set in the cluster, from the ConfigMap. Without it nothing leaves the process.
     otel_exporter_otlp_endpoint: str | None = None
+
+    # The Langfuse Cloud project of the team and the tutor (ADR-027). The keys
+    # are secrets; without both, nothing goes there. US region, like the model.
+    langfuse_base_url: str = "https://us.cloud.langfuse.com"
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
 
 
 @lru_cache

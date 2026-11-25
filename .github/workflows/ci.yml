@@ -21,4 +21,4 @@ jobs:
     with:
       servicio: assistant-api
       # No database, so no migration.
-      secretos: BEDROCK_MODEL_ID REDIS_URL JWT_PUBLIC_KEY OTEL_EXPORTER_OTLP_HEADERS
+      secretos: BEDROCK_MODEL_ID REDIS_URL JWT_PUBLIC_KEY OTEL_EXPORTER_OTLP_HEADERS LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY

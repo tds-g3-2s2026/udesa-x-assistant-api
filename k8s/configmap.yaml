@@ -13,3 +13,6 @@ data:
   TURNS_PER_HOUR: "160"
   # Logs, metrics and traces to Grafana Cloud. The token goes in the Secret.
   OTEL_EXPORTER_OTLP_ENDPOINT: "https://otlp-gateway-prod-sa-east-1.grafana.net/otlp"
+  # The agent's steps, with what the model read and answered, to the Langfuse
+  # project of the team and the tutor (ADR-027). The keys go in the Secret.
+  LANGFUSE_BASE_URL: "https://us.cloud.langfuse.com"
