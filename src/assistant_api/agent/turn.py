@@ -3,10 +3,11 @@
 The app sends what the user asked, the screen it shows now and the steps it
 already took. The conversation for the model is rebuilt from those on every
 call: the app reports what happened, and never gets to write the model's lines.
-Nothing of it is stored (ADR-023).
+The service stores none of it (ADR-023). The traces of Langfuse carry it, for
+the team and the tutor to review (ADR-027).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from assistant_api import telemetry
 from assistant_api.agent.catalog import CATALOG, invalid_arguments, tool_specs
@@ -18,6 +19,8 @@ NOT_DONE_SAY = "No pude hacerlo. Probá pedírmelo de otra forma."
 # A refused action is explained to the model and it gets one more chance in the
 # same call; a second refusal ends the request instead of spending more.
 ATTEMPTS = 2
+# The outcomes where the model answered with something the app could use.
+ANSWERED = ("action", "finished")
 
 
 @dataclass(frozen=True)
@@ -87,10 +90,42 @@ def finish(say: str, outcome: str, turns: list[ModelTurn]) -> Decision:
 
 
 def next_step(model: Model, request: str, screen: dict, steps: list[PastStep]) -> Decision:
-    """The action the app takes next, or finish with what it reads aloud."""
-    decision = decide(model, request, screen, steps)
+    """The action the app takes next, or finish with what it reads aloud.
+
+    The step is a span: Grafana sees its action and outcome, and Langfuse also
+    what the app sent and what went back to it (ADR-027).
+    """
+    with telemetry.agent_tracer.start_as_current_span(telemetry.STEP_SPAN) as span:
+        span.set_attributes(
+            {
+                "langfuse.observation.type": "agent",
+                "langfuse.observation.metadata.step": len(steps) + 1,
+                "langfuse.observation.input": as_json(
+                    {"pedido": request, "pantalla": screen, "pasos": [asdict(s) for s in steps]}
+                ),
+            }
+        )
+        decision = decide(model, request, screen, steps)
+        # Ended by the server: worth a look when reviewing the traces.
+        level = "DEFAULT" if decision.outcome in ANSWERED else "WARNING"
+        span.set_attributes(
+            {
+                "langfuse.observation.metadata.action": decision.action,
+                "langfuse.observation.metadata.outcome": decision.outcome,
+                "langfuse.observation.level": level,
+                "langfuse.observation.output": as_json(
+                    {"action": decision.action, "arguments": decision.arguments}
+                ),
+            }
+        )
     record(decision)
     return decision
+
+
+def cost(model: Model, turn: ModelTurn) -> float:
+    """USD of one call, with the model's prices per million tokens."""
+    input_price, output_price = model.prices
+    return (turn.input_tokens * input_price + turn.output_tokens * output_price) / 1_000_000
 
 
 def record(decision: Decision) -> None:
@@ -111,13 +146,26 @@ def decide(model: Model, request: str, screen: dict, steps: list[PastStep]) -> D
     messages = conversation(request, screen, steps)
     turns: list[ModelTurn] = []
     for _ in range(ATTEMPTS):
-        # A span per call, inside the request's: the tokens, never the messages.
-        with telemetry.tracer.start_as_current_span("assistant.model") as span:
+        # A span per call, inside the step's: Grafana gets the tokens and the
+        # cost, and Langfuse also the messages and the answer.
+        with telemetry.agent_tracer.start_as_current_span(telemetry.MODEL_SPAN) as span:
+            span.set_attributes(
+                {
+                    "langfuse.observation.type": "generation",
+                    "gen_ai.system": "aws.bedrock",
+                    "gen_ai.request.model": model.name,
+                    "langfuse.observation.input": as_json(
+                        [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
+                    ),
+                }
+            )
             turn = model.converse(SYSTEM_PROMPT, messages, tool_specs())
             span.set_attributes(
                 {
                     "gen_ai.usage.input_tokens": turn.input_tokens,
                     "gen_ai.usage.output_tokens": turn.output_tokens,
+                    "gen_ai.usage.cost": cost(model, turn),
+                    "langfuse.observation.output": as_json(turn.content),
                 }
             )
         turns.append(turn)

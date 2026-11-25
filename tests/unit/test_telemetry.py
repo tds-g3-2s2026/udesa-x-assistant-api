@@ -1,5 +1,10 @@
-"""The metrics and traces of a step, against a scripted model: numbers, never text."""
+"""The metrics and traces of a step, against a scripted model.
 
+Grafana gets numbers and catalog names, never text (ADR-023). Langfuse gets the
+agent's spans with what the model read and answered (ADR-027).
+"""
+
+import json
 import logging
 
 import pytest
@@ -95,7 +100,31 @@ def test_a_request_out_of_steps_is_counted_without_calling_the_model(recorded):
     assert "assistant.model.tokens" not in points
 
 
-def test_ai04_each_call_to_the_model_is_a_span_with_its_tokens(spans):
+@pytest.fixture(scope="module")
+def grafana():
+    """What the exporter to Grafana Cloud gets."""
+    exporter = InMemorySpanExporter()
+    processor = telemetry.WithoutContent(SimpleSpanProcessor(exporter))
+    telemetry.tracer_provider.add_span_processor(processor)
+    yield exporter
+    exporter.shutdown()
+
+
+@pytest.fixture(scope="module")
+def langfuse():
+    """What the exporter to the Langfuse project gets."""
+    exporter = InMemorySpanExporter()
+    processor = telemetry.OnlyAgentSpans(SimpleSpanProcessor(exporter))
+    telemetry.tracer_provider.add_span_processor(processor)
+    yield exporter
+    exporter.shutdown()
+
+
+def named(exporter: InMemorySpanExporter, name: str) -> list:
+    return [span for span in exporter.get_finished_spans() if span.name == name]
+
+
+def test_ai04_each_call_to_the_model_is_a_generation_with_its_tokens_and_cost(spans):
     spans.clear()
     # The first action is refused: the model is called twice in the same step.
     model = ScriptedModel(
@@ -104,12 +133,72 @@ def test_ai04_each_call_to_the_model_is_a_span_with_its_tokens(spans):
 
     next_step(model, REQUEST, SCREEN, [])
 
-    calls = [span for span in spans.get_finished_spans() if span.name == "assistant.model"]
+    calls = named(spans, telemetry.MODEL_SPAN)
     assert len(calls) == 2
-    assert dict(calls[0].attributes) == {
-        "gen_ai.usage.input_tokens": 900,
-        "gen_ai.usage.output_tokens": 30,
+    attributes = calls[0].attributes
+    assert attributes["langfuse.observation.type"] == "generation"
+    assert attributes["gen_ai.request.model"] == "scripted"
+    tokens = (attributes["gen_ai.usage.input_tokens"], attributes["gen_ai.usage.output_tokens"])
+    assert tokens == (900, 30)
+    assert attributes["gen_ai.usage.cost"] == pytest.approx(0.00105)
+    # What the model read, system prompt first, and what it answered.
+    read = json.loads(attributes["langfuse.observation.input"])
+    assert read[0]["role"] == "system"
+    assert REQUEST in read[1]["content"][0]["text"]
+    assert json.loads(attributes["langfuse.observation.output"]) == [
+        tool_use("like_post", {"ref": "p9"})
+    ]
+
+
+def test_the_step_is_a_span_with_what_the_app_sent_and_got(spans):
+    spans.clear()
+    model = ScriptedModel([tool_use("like_post", {"ref": "p2"})])
+
+    next_step(model, REQUEST, SCREEN, [])
+
+    [step] = named(spans, telemetry.STEP_SPAN)
+    attributes = step.attributes
+    assert attributes["langfuse.observation.type"] == "agent"
+    assert attributes["langfuse.observation.metadata.step"] == 1
+    assert attributes["langfuse.observation.metadata.action"] == "like_post"
+    assert attributes["langfuse.observation.metadata.outcome"] == "action"
+    assert attributes["langfuse.observation.level"] == "DEFAULT"
+    sent = json.loads(attributes["langfuse.observation.input"])
+    assert sent == {"pedido": REQUEST, "pantalla": SCREEN, "pasos": []}
+    assert json.loads(attributes["langfuse.observation.output"]) == {
+        "action": "like_post",
+        "arguments": {"ref": "p2"},
     }
+    [call] = named(spans, telemetry.MODEL_SPAN)
+    assert call.parent.span_id == step.context.span_id
+
+
+def test_a_step_the_server_ended_is_a_warning(spans):
+    spans.clear()
+    steps = [PastStep("scroll_feed", {"direction": "down"}, {"ok": True})] * MAX_STEPS
+
+    next_step(ScriptedModel(), REQUEST, SCREEN, steps)
+
+    [step] = named(spans, telemetry.STEP_SPAN)
+    assert step.attributes["langfuse.observation.metadata.outcome"] == "step_limit"
+    assert step.attributes["langfuse.observation.level"] == "WARNING"
+
+
+def test_grafana_gets_the_agent_spans_without_a_word_of_what_was_said(grafana):
+    grafana.clear()
+    model = ScriptedModel([tool_use("like_post", {"ref": "p2"})])
+
+    next_step(model, REQUEST, SCREEN, [])
+
+    finished = grafana.get_finished_spans()
+    assert {span.name for span in finished} == {telemetry.STEP_SPAN, telemetry.MODEL_SPAN}
+    values = [str(value) for span in finished for value in span.attributes.values()]
+    # Not the request, a post of the screen or the model's answer (ADR-023).
+    for said in (REQUEST, "fútbol", '"ref": "p2"'):
+        assert not any(said in value for value in values)
+    [call] = named(grafana, telemetry.MODEL_SPAN)
+    assert call.attributes["gen_ai.usage.input_tokens"] == 900
+    assert call.attributes["gen_ai.usage.cost"] == pytest.approx(0.00105)
 
 
 @pytest.fixture
@@ -140,9 +229,50 @@ async def test_the_model_span_joins_the_trace_of_the_request(api, spans):
     )
 
     assert response.status_code == 200
-    [call] = [span for span in spans.get_finished_spans() if span.name == "assistant.model"]
+    [call] = named(spans, telemetry.MODEL_SPAN)
     assert format(call.context.trace_id, "032x") == CALLER_TRACE_ID
     assert call.parent is not None
+
+
+async def test_langfuse_gets_the_step_as_the_root_of_the_request_trace(api, langfuse):
+    langfuse.clear()
+    model = ScriptedModel([tool_use("like_post", {"ref": "p2"})])
+    main.app.dependency_overrides[get_model] = lambda: model
+
+    await api.post(
+        "/api/assistant/turns",
+        json={"request": REQUEST, "screen": SCREEN},
+        headers={**signed_in(), "traceparent": CALLER_TRACEPARENT},
+    )
+
+    # Neither the HTTP span nor anything else that is not the agent's.
+    finished = langfuse.get_finished_spans()
+    assert sorted(span.name for span in finished) == [telemetry.MODEL_SPAN, telemetry.STEP_SPAN]
+    [step] = named(langfuse, telemetry.STEP_SPAN)
+    assert step.parent is None
+    # The trace id Grafana shows for the same request: one leads to the other.
+    assert format(step.context.trace_id, "032x") == CALLER_TRACE_ID
+    assert REQUEST in step.attributes["langfuse.observation.input"]
+
+
+def test_langfuse_is_one_more_destination_for_the_agent_spans(monkeypatch):
+    added: list = []
+    monkeypatch.setattr(telemetry.tracer_provider, "add_span_processor", added.append)
+
+    telemetry.export_to_langfuse(InMemorySpanExporter())
+
+    [processor] = added
+    assert isinstance(processor, telemetry.OnlyAgentSpans)
+
+
+def test_the_filters_pass_flush_and_shutdown_on_to_the_exporter():
+    exporter = InMemorySpanExporter()
+    for processor in (
+        telemetry.WithoutContent(SimpleSpanProcessor(exporter)),
+        telemetry.OnlyAgentSpans(SimpleSpanProcessor(exporter)),
+    ):
+        assert processor.force_flush() is True
+        processor.shutdown()
 
 
 async def test_with_an_endpoint_the_service_exports_and_flushes_on_shutdown(monkeypatch):

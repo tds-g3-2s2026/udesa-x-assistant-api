@@ -44,6 +44,10 @@ def tool_use(name: str, arguments: dict, tool_use_id: str = "t1") -> dict:
 class ScriptedModel:
     """Answers each call with the next scripted content, and keeps what it was sent."""
 
+    name = "scripted"
+    # USD per million tokens: a call of 900 in and 30 out costs 0.00105.
+    prices = (1.0, 5.0)
+
     def __init__(self, *turns: list[dict]) -> None:
         self.turns = list(turns)
         self.received: list[list[dict]] = []
@@ -270,6 +274,9 @@ async def test_ai04_answers_503_when_it_is_turned_off(api):
 
 class SilentModel:
     """A model that never answers, the way a Bedrock timeout looks from the loop."""
+
+    name = "silent"
+    prices = (0.0, 0.0)
 
     def converse(self, system: str, messages: list[dict], tools: list[dict]) -> ModelTurn:
         raise ModelUnavailableError("ReadTimeoutError")
