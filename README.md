@@ -50,7 +50,7 @@ src/assistant_api/
 ├── main.py            # la app de FastAPI: el endpoint, /healthcheck y la telemetría
 ├── turns.py           # POST /assistant/turns, con los límites de lo que manda la app
 ├── guards.py          # el interruptor, el JWT, el rate limit y los errores
-├── telemetry.py       # trazas, logs y métricas, sin el texto de nadie
+├── telemetry.py       # trazas, logs y métricas; el texto solo a Langfuse
 ├── settings.py        # la configuración que se lee del entorno
 └── agent/
     ├── catalog.py     # las acciones como herramientas de Converse y su validación
@@ -172,6 +172,8 @@ que pasa el CI construye la imagen, la publica en ECR (`tds-group-3/assistant-ap
 | `REDIS_URL` | El Redis del cluster, base `/2` (users-api usa `/0` y posts-api `/1`) |
 | `JWT_PUBLIC_KEY` | La pública de users-api, la misma que tiene posts-api |
 | `OTEL_EXPORTER_OTLP_HEADERS` | De organización: no hace falta cargarlo |
+| `LANGFUSE_PUBLIC_KEY` | La pública del proyecto de Langfuse: Settings → API Keys |
+| `LANGFUSE_SECRET_KEY` | La secreta del mismo par |
 
 Para apagar el asistente sin tocar el código, `ASSISTANT_ENABLED: "false"` en el ConfigMap:
 el pipeline reemplaza los pods cuando cambia la configuración y el endpoint responde `503`.
@@ -190,6 +192,25 @@ del pedido, de los posts ni de la respuesta** (ADR-023): solo nombres del catál
 | `assistant.model.tokens` | Tokens que leyó y escribió el modelo | `type`: `input` u `output` |
 | `assistant.spoken.length` | Largo de la oración que la app lee al terminar, en caracteres | |
 
-Cada llamada al modelo es un span `assistant.model`, hijo del span del request, con los tokens
-como atributos. En Grafana las métricas aparecen con guiones bajos y el sufijo de Prometheus,
-como `assistant_steps_total`.
+Cada paso es un span `assistant.step`, hijo del span del request, con la acción y el resultado.
+Adentro, cada llamada al modelo es un span `assistant.model` con el modelo, los tokens y el costo
+en dólares. En Grafana las métricas aparecen con guiones bajos y el sufijo de Prometheus, como
+`assistant_steps_total`.
+
+## Langfuse
+
+Los spans del agente, el paso y sus llamadas al modelo, también van al proyecto de Langfuse
+Cloud del equipo y del tutor (región US), **con el texto**: lo que mandó la app, lo que leyó el
+modelo con el prompt de sistema, lo que contestó, y la acción que volvió a la app (ADR-027). Es
+donde se revisa por qué el asistente eligió una acción. El plan gratuito muestra los últimos 30
+días.
+
+- Van solo si están `LANGFUSE_PUBLIC_KEY` y `LANGFUSE_SECRET_KEY`. La URL sale del ConfigMap.
+- **El texto nunca llega a Grafana.** El procesador `WithoutContent` le saca a cada span los
+  atributos `langfuse.observation.input` y `output` antes de exportarlo, y un test lo verifica.
+- Langfuse no recibe los spans HTTP: el paso es la raíz de su traza, con **el mismo trace id**
+  que muestra Grafana para ese request. Con el id de uno se encuentra en el otro.
+- Un paso que cortó el servidor (`refused`, `no_action` o `step_limit`) queda con nivel
+  `WARNING`: en Langfuse se filtra por nivel.
+- El costo sale de los precios de `BEDROCK_INPUT_PRICE` y `BEDROCK_OUTPUT_PRICE`, en dólares por
+  millón de tokens, los de Claude Haiku 5.5. Si cambia el modelo, cambian también esos valores.

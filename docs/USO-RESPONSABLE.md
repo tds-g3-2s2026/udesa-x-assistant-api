@@ -60,9 +60,14 @@ pantalla. Así nunca puede hacer más de lo que la persona podría hacer a mano.
   el nombre y el handle del autor, el texto, los likes y si ya tienen like o retweet. **Nunca**
   ids internos, emails, tokens ni audio. La relación entre `p2` y el post real queda en la app
   (ADR-023).
-- **No se guarda nada del contenido.** Ni el pedido ni las respuestas van a una base, a los logs
-  ni a las trazas. Las métricas son números y nombres del catálogo: pasos por acción, demora,
-  tokens y largo de la respuesta (`telemetry.py`, y un test que lo verifica).
+- **El servicio no guarda nada del contenido.** Ni el pedido ni las respuestas van a una base,
+  a los logs ni a lo que llega a Grafana. Ahí las métricas y las trazas son números y nombres del
+  catálogo: pasos por acción, demora, tokens y largo de la respuesta (`telemetry.py`, y un test
+  que lo verifica).
+- **Langfuse sí lo ve** (ADR-027). Cada paso llega al proyecto de Langfuse del equipo y del
+  tutor con lo que mandó la app y lo que contestó el modelo, para poder revisar por qué eligió una
+  acción. Es la misma información que ya va al modelo: nunca ids, emails, tokens ni audio. El
+  plan gratuito muestra los últimos 30 días.
 
 ## Sesgos y riesgos
 
