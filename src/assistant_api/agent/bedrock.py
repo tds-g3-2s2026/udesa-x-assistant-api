@@ -25,9 +25,19 @@ READ_TIMEOUT = 10
 
 class BedrockModel:
     def __init__(
-        self, model_id: str, *, region: str, thinking: bool = False, client: object = None
+        self,
+        model_id: str,
+        *,
+        region: str,
+        thinking: bool = False,
+        client: object = None,
+        name: str = "bedrock",
+        prices: tuple[float, float] = (0.0, 0.0),
     ) -> None:
         self.model_id = model_id
+        # The ARN names the group's account: the traces get this name instead.
+        self.name = name
+        self.prices = prices
         # Off by default: thinking delays the first action by seconds, and picking
         # one of a dozen actions does not need it.
         self.thinking = thinking

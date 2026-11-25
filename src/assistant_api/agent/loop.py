@@ -35,6 +35,10 @@ class ModelTurn:
 
 
 class Model(Protocol):
+    # How the traces name it, and USD per million tokens read and written.
+    name: str
+    prices: tuple[float, float]
+
     def converse(self, system: str, messages: list[dict], tools: list[dict]) -> ModelTurn:
         """One answer of the model, or `ModelUnavailableError` if it gave none."""
         ...

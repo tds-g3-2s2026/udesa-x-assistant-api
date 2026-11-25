@@ -1,9 +1,13 @@
-"""Traces, logs and metrics of the service, with nothing of what the users say.
+"""Traces, logs and metrics of the service, and what the model read and answered.
 
 The same shape as posts-api (ADR-013): a span per request, each log line with
 its trace, HTTP durations in seconds. On top, the assistant's own metrics. None
-of them carries the text of a request, a post or an answer: only names from the
-catalog, outcomes and numbers (ADR-023).
+of what reaches Grafana carries the text of a request, a post or an answer:
+only names from the catalog, outcomes and numbers (ADR-023).
+
+The agent's spans, a step and each call to the model, also go to Langfuse,
+and only there with the text: the project of the team and the tutor, where
+each call is read with its prompt, answer, tokens and cost (ADR-027).
 
 The providers live here, and not in `main`, so the agent records its steps
 without importing the app.
@@ -16,6 +20,7 @@ from importlib.metadata import version
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from opentelemetry.context import Context
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry.sdk._logs import LoggerProvider
@@ -27,7 +32,7 @@ from opentelemetry.sdk.metrics.view import (
     View,
 )
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 
 SERVICE_NAME = "assistant-api"
@@ -75,7 +80,14 @@ meter_provider = MeterProvider(
     ],
 )
 tracer_provider = TracerProvider(resource=_resource())
-tracer = tracer_provider.get_tracer("assistant_api")
+
+# The agent's spans: one per step and one per call to the model inside it.
+AGENT_SCOPE = "assistant_api.agent"
+STEP_SPAN = "assistant.step"
+MODEL_SPAN = "assistant.model"
+agent_tracer = tracer_provider.get_tracer(AGENT_SCOPE)
+# What the model read and answered. Langfuse gets these and nobody else.
+CONTENT_ATTRIBUTES = frozenset({"langfuse.observation.input", "langfuse.observation.output"})
 
 _meter = meter_provider.get_meter("assistant_api")
 steps = _meter.create_counter(
@@ -142,7 +154,7 @@ def export(span_exporter: SpanExporter, log_exporter: LogRecordExporter) -> Logg
     The log handler goes on the root logger, so this has to run after any
     `logging.basicConfig(force=True)`, which removes the root handlers.
     """
-    tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+    tracer_provider.add_span_processor(WithoutContent(BatchSpanProcessor(span_exporter)))
     provider = LoggerProvider(resource=_resource())
     provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     handler = LoggingHandler(logger_provider=provider)
@@ -152,3 +164,70 @@ def export(span_exporter: SpanExporter, log_exporter: LogRecordExporter) -> Logg
     handler.addFilter(lambda record: not record.name.startswith("opentelemetry"))
     logging.getLogger().addHandler(handler)
     return provider
+
+
+def export_to_langfuse(span_exporter: SpanExporter) -> None:
+    """Send the agent's spans, text included, to Langfuse as well (ADR-027)."""
+    tracer_provider.add_span_processor(OnlyAgentSpans(BatchSpanProcessor(span_exporter)))
+
+
+def copy_span(span: ReadableSpan, **changes) -> ReadableSpan:
+    fields = {
+        "name": span.name,
+        "context": span.context,
+        "parent": span.parent,
+        "resource": span.resource,
+        "attributes": span.attributes,
+        "events": span.events,
+        "links": span.links,
+        "kind": span.kind,
+        "status": span.status,
+        "start_time": span.start_time,
+        "end_time": span.end_time,
+        "instrumentation_scope": span.instrumentation_scope,
+    }
+    return ReadableSpan(**{**fields, **changes})
+
+
+class Forwarding(SpanProcessor):
+    """Hands the finished spans it lets through to the processor that exports them."""
+
+    def __init__(self, next_processor: SpanProcessor) -> None:
+        self.next_processor = next_processor
+
+    def on_start(self, span: Span, parent_context: Context | None = None) -> None:
+        self.next_processor.on_start(span, parent_context=parent_context)
+
+    def shutdown(self) -> None:
+        self.next_processor.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self.next_processor.force_flush(timeout_millis)
+
+
+class WithoutContent(Forwarding):
+    """Every span, without the attributes that carry what the model read and answered."""
+
+    def on_end(self, span: ReadableSpan) -> None:
+        attributes = span.attributes or {}
+        if CONTENT_ATTRIBUTES.isdisjoint(attributes):
+            self.next_processor.on_end(span)
+            return
+        kept = {key: value for key, value in attributes.items() if key not in CONTENT_ATTRIBUTES}
+        self.next_processor.on_end(copy_span(span, attributes=kept))
+
+
+class OnlyAgentSpans(Forwarding):
+    """The steps and their calls to the model: Langfuse never sees the HTTP spans."""
+
+    def on_end(self, span: ReadableSpan) -> None:
+        scope = span.instrumentation_scope
+        if scope is None or scope.name != AGENT_SCOPE:
+            return
+        if span.name == STEP_SPAN:
+            # Its parent is the HTTP span, which never gets there: without one,
+            # the step is the root of its trace, and the trace id is still the
+            # one Grafana shows for the same request.
+            self.next_processor.on_end(copy_span(span, parent=None))
+            return
+        self.next_processor.on_end(span)

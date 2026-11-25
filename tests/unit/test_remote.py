@@ -111,6 +111,9 @@ def test_remote_runs_sign_in_with_the_account_from_the_environment(monkeypatch):
 class ScriptedModel:
     """Answers each call with the next scripted action, and keeps what it was sent."""
 
+    name = "scripted"
+    prices = (0.0, 0.0)
+
     def __init__(self, *actions: tuple[str, dict]) -> None:
         self.actions = list(actions)
         self.received: list[list[dict]] = []
