@@ -1,4 +1,5 @@
 import logging
+from base64 import b64encode
 from contextlib import asynccontextmanager
 from importlib.metadata import version
 
@@ -17,11 +18,28 @@ from assistant_api.guards import (
     problem_error_handler,
     validation_error_handler,
 )
-from assistant_api.settings import get_settings
-from assistant_api.telemetry import export, instrument, meter_provider
+from assistant_api.settings import Settings, get_settings
+from assistant_api.telemetry import export, export_to_langfuse, instrument, meter_provider
 from assistant_api.turns import router as turns_router
 
 API_PREFIX = "/api"
+
+
+def langfuse_exporter(settings: Settings) -> OTLPSpanExporter:
+    """The OTLP endpoint of the Langfuse project, with its keys as Basic auth.
+
+    The exporter also reads OTEL_EXPORTER_OTLP_HEADERS, which holds the token of
+    Grafana: the Authorization given here replaces it, so it never gets there.
+    The ingestion version makes the traces show up at once instead of minutes later.
+    """
+    keys = f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}"
+    return OTLPSpanExporter(
+        endpoint=f"{settings.langfuse_base_url}/api/public/otel/v1/traces",
+        headers={
+            "Authorization": f"Basic {b64encode(keys.encode()).decode()}",
+            "x-langfuse-ingestion-version": "4",
+        },
+    )
 
 
 @asynccontextmanager
@@ -40,13 +58,20 @@ async def lifespan(app: FastAPI):
         logger_provider = export(OTLPSpanExporter(), OTLPLogExporter())
         metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter())
         meter_provider.add_metric_reader(metric_reader)
+    if settings.langfuse_public_key and settings.langfuse_secret_key:
+        export_to_langfuse(langfuse_exporter(settings))
 
     app.state.settings = settings
     app.state.jwt_public_key = load_public_key(settings.jwt_public_key)
     app.state.redis = Redis.from_url(settings.redis_url)
     # No model without its ARN: the endpoint answers 503 instead of failing on every call.
     app.state.model = (
-        BedrockModel(settings.bedrock_model_id, region=settings.bedrock_region)
+        BedrockModel(
+            settings.bedrock_model_id,
+            region=settings.bedrock_region,
+            name=settings.bedrock_model_name,
+            prices=(settings.bedrock_input_price, settings.bedrock_output_price),
+        )
         if settings.bedrock_model_id
         else None
     )
