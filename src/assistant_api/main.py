@@ -101,5 +101,8 @@ app.include_router(turns_router, prefix=API_PREFIX)
 
 @app.get("/healthcheck", tags=["health"])
 async def healthcheck() -> dict[str, str]:
-    """Up as soon as the process is. Redis and Bedrock are only reached by a request."""
-    return {"status": "ok"}
+    """Up as soon as the process is. Redis and Bedrock are only reached by a request.
+
+    The version goes too, like in the other services: the backoffice shows it.
+    """
+    return {"status": "ok", "version": app.version}
