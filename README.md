@@ -1,5 +1,7 @@
 # UdeSA-X Assistant API
 
+[![Cobertura](https://codecov.io/gh/tds-g3-2s2026/udesa-x-assistant-api/branch/main/graph/badge.svg)](https://codecov.io/gh/tds-g3-2s2026/udesa-x-assistant-api)
+
 Asistente por voz de UdeSA-X. El usuario pide algo hablando, la app lo pasa a texto en el
 teléfono y un modelo de Amazon Bedrock elige, paso a paso, acciones de un catálogo cerrado
 sobre lo que hay en pantalla: bajar en el feed, dar like, buscar, seguir, publicar. El modelo
